@@ -159,7 +159,7 @@ module ActiveModel
           resource_object
         end
 
-        def relationship_value_for(serializer, options = {})
+        def relationship_data_for(serializer, options = {})
           if serializer.respond_to?(:each)
             serializer.map { |s| resource_identifier_for(s) }
           else
@@ -171,21 +171,52 @@ module ActiveModel
           end
         end
 
+        def relationship_links_for(name, owner, options = {})
+          options[:links].each_with_object({}) do |(key, link), hash|
+            if link.respond_to?(:call)
+              hash[key] = link.call(owner, name)
+            else
+              hash[key] = link
+            end
+
+            hash
+          end
+        end
+
+        def relationship_meta_for(name, owner, options = {})
+          if options[:meta].respond_to?(:call)
+            options[:meta].call(owner, name)
+          else
+            options[:meta]
+          end
+        end
+
         def relationships_for(serializer)
-          resource_type = resource_identifier_type_for(serializer)
-          requested_associations = fieldset.fields_for(resource_type) || '*'
-          include_tree = IncludeTree.from_include_args(requested_associations)
-          serializer.associations(include_tree).each_with_object({}) do |association, hash|
-            hash[association.key] = { data: relationship_value_for(association.serializer, association.options) }
+          serializer.associations.each_with_object({}) do |association, hash|
+            hash[association.key] = {}
+
+            if association.data?
+              hash[association.key][:data] = relationship_data_for(association.serializer, association.options)
+            end
+
+            if association.options.fetch(:links, false)
+              hash[association.key][:links] = relationship_links_for(association.name, serializer.object, association.options)
+            end
+
+            if association.options.fetch(:meta, false)
+              hash[association.key][:meta] = relationship_meta_for(association.name, serializer.object, association.options)
+            end
           end
         end
 
         def included_resources(include_tree, primary_data)
           included = []
 
-          serializer.associations(include_tree).each do |association|
-            add_included_resources_for(association.serializer, include_tree[association.key], primary_data, included)
-          end
+          serializer.associations(include_tree)
+            .select(&:data?)
+            .each do |association|
+              add_included_resources_for(association.serializer, include_tree[association.key], primary_data, included)
+            end
 
           included
         end
@@ -201,9 +232,11 @@ module ActiveModel
             return if included.include?(resource_object) || primary_data.include?(resource_object)
             included.push(resource_object)
 
-            serializer.associations(include_tree).each do |association|
-              add_included_resources_for(association.serializer, include_tree[association.key], primary_data, included)
-            end
+            serializer.associations(include_tree)
+              .select(&:data?)
+              .each do |association|
+                add_included_resources_for(association.serializer, include_tree[association.key], primary_data, included)
+              end
           end
         end
 
